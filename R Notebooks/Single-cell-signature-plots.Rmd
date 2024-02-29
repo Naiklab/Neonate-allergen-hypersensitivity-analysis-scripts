@@ -1,0 +1,153 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(Seurat)
+library(UCell)
+library(tidyverse)
+library(enrichR)
+library(SCpubr)
+```
+
+Loading DC subset seurat object
+```{r}
+dc.data <- readRDS("~SINGLE-CELL-DATA/R-DATA/Dendritic.cells.RDS")
+```
+
+Importing DC activation signature from - C. Bosteels, et. al Immunity
+```{r}
+ref.data.markers <- read.csv("../References/DC activation signature (C. Bosteels, et. al Immunity)//Ref.data.marker_genes.csv")
+```
+
+```{r}
+gene.signatures <- ref.data.markers %>% dplyr::filter(avg_log2FC>=0.5,p_val_adj<=0.05) 
+gene.signatures <- split(gene.signatures$gene, gene.signatures$cluster)
+```
+
+Using UCell package to caluclate gene signature score
+```{r}
+dc.data.updated <- AddModuleScore_UCell(dc.data, features = gene.signatures,
+    ncores = 2)
+```
+
+#Figure 4E
+```{r}
+pdf("Violin-plot-DC-data-(with-cell-types-from-Bosteels-Immunity-Paper).pdf",height = 10,width = 10)
+VlnPlot(dc.data.updated, features = featnames, pt.size = 0, group.by = "orig.ident",
+    ncol = 4,same.y.lims =TRUE) 
+dev.off()
+```
+
+#Figure 4C
+Top 20 DE genes between HDM and CTRL group (Dendritic cell subset) plotted in a stacked violin plot
+```{r}
+pdf("~/Desktop/NAIK-LAB-PROJECTS/Yue_Kody_paper(21-23)/Stacked-Violin-plot-top-20-HDM_DC-genes.pdf",width = 40,height = 5)
+VlnPlot(dc.data.updated,features = c("Ccl5","Fabp5","Isg15","Ccl22","Ccl24","Il4i1","Fscn1","Ccr7","Fabp4","Cd40","Socs2","Mreg","Slfn5","Rsad2","Ifit1","H2-M2", "Ly75", "AA467197", "Irf7", "Epsti1"),split.by = "orig.ident",group.by = "orig.ident",stack = TRUE,same.y.lims = TRUE) +
+    theme(legend.position = "none") + ggtitle("Identity on y-axis")
+dev.off()
+```
+
+#Figure 4E and 4D
+DC activation signatures from C. Bosteels, et.al Immunity
+```{r}
+featnames <- c()
+for(x in featnames){
+  pdf(paste0(x,"-gene-signature-Violin-plot.pdf",sep=""),height = 10,width = 10)
+  print(VlnPlot(dc.data.updated, features = x, pt.size = 0, group.by = "orig.ident",
+    ncol = 4,same.y.lims =TRUE,flip = TRUE) + stat_compare_means())
+  dev.off()
+}
+
+
+```
+
+
+Import full data seurat object for HDM and Control sample
+```{r}
+full.data <- readRDS("../Yue_Kody_paper(21-23)/SINGLE-CELL-DATA/R-DATA/full_data.RDS")
+```
+
+Create subsets for fibroblasts and epithelial cells
+```{r}
+fibroblast <- subset(full.data,seurat_clusters %in% c(2,6,11,12,13,16))
+epithelial <- subset(full.data,seurat_clusters %in% c(3,0,11))
+```
+
+Run DE analysis for both subsets (HDM vs Control)
+```{r}
+de.genes.fb <- FindMarkers(fibroblast,ident.1 = "HDM",ident.2 = "Control",group.by = "orig.ident")
+de.genes.epithelial <- FindMarkers(epithelial,ident.1 = "HDM",ident.2 = "Control",group.by = "orig.ident")
+```
+
+
+```{r}
+dbs <- c("GO_Molecular_Function_2021", "GO_Cellular_Component_2021", "GO_Biological_Process_2021","KEGG_2019_Mouse")
+```
+
+Run pathway analysis using DE genes
+```{r}
+dir.create("~/Desktop/NAIK-LAB-PROJECTS/Yue_Kody_paper(21-23)/Pathway-analysis/")
+setwd("~/Desktop/NAIK-LAB-PROJECTS/Yue_Kody_paper(21-23)/Pathway-analysis/")
+
+up.markers <- de.genes.fb %>% rownames_to_column("gene") %>% filter(p_val_adj<=0.1,avg_log2FC>0)
+down.markers <- de.genes.fb %>% rownames_to_column("gene") %>% filter(p_val_adj<=0.1,avg_log2FC<0)
+  
+enriched.up <- enrichr(up.markers$gene, dbs)
+enriched.down <- enrichr(down.markers$gene, dbs)
+
+for(x in dbs){
+  write.csv(enriched.up[x],file=paste("DE-GENES-FIBROBLAST-HDM-VS-CONTROL-UP",x,"-","-downregulated-genes.csv",sep = ""))
+  write.csv(enriched.down[x],file=paste("DE-GENES-FIBROBLAST-HDM-VS-CONTROL-DOWN",x,"-","-downregulated-genes.csv",sep = ""))
+}
+
+up.markers <- de.genes.epithelial %>% rownames_to_column("gene") %>% filter(p_val_adj<=0.1,avg_log2FC>0)
+down.markers <- de.genes.epithelial %>% rownames_to_column("gene")  %>% filter(p_val_adj<=0.1,avg_log2FC<0)
+
+enriched.up <- enrichr(up.markers$gene, dbs)
+enriched.down <- enrichr(down.markers$gene, dbs)
+
+for(x in dbs){
+  write.csv(enriched.up[x],file=paste("DE-GENES-EPITHELIAL-HDM-VS-CONTROL-UP",x,"-","-downregulated-genes.csv",sep = ""))
+  write.csv(enriched.down[x],file=paste("DE-GENES-EPITHELIAL-HDM-VS-CONTROL-DOWN",x,"-","-downregulated-genes.csv",sep = ""))
+}
+```
+
+Generating Dot plots
+```{r}
+levels <- c(4,5,7,8,9,10,0,1,3,2,6,11,12,13,16,14,15,17,18,19)
+genes <- c("Ccl22","Ccl17","Il41i","Apol7c","Il12b")
+```
+
+```{r}
+pdf("~/Desktop/NAIK-LAB-PROJECTS/Yue_Kody_paper(21-23)/Dotplot-full-data-reordered.pdf",width = 10,height = 4)
+DotPlot(full.data,features =c("Ccl22","Ccl17","Il4i1","Apol7c","Il12b"),) + scale_color_brewer(palette  ="YlOrRd") + coord_flip()
+dev.off()
+
+clist <- c("grey85","#FFF7EC","#FEE8C8","#FDD49E","#FDBB84","#FC8D59","#EF6548","#D7301F")
+#VlnPlot(full.data,features =c("Ccl22","Ccl17","Il4i1","Apol7c","Il12b"),group.by = "seurat_clusters",stack = TRUE)
+DotPlot(full.data,features =c("Ccl22","Ccl17","Il4i1","Apol7c","Il12b"),cols = clist)  
+```
+
+```{r}
+hdm.data <- subset(full.data,orig.ident %in% c("HDM"))
+control.data <- subset(full.data,orig.ident %in% c("Control"))
+```
+
+#Extended Figure 6B
+```{r}
+desired_range <- c(0, 20) 
+
+pdf("~/Desktop/NAIK-LAB-PROJECTS/Yue_Kody_paper(21-23)/Dotplot-CONTROL-data-reordered.pdf",width = 10,height = 4)
+SCpubr::do_DotPlot(control.data,features = c("Ccl22","Ccl17","Il4i1","Apol7c","Il12b"),sequential.palette = "YlOrRd",flip = TRUE) + scale_size_continuous(limits  = c(0,100)) + scale_fill_gradientn(colours = clist,limits = c(0,3.5))
+dev.off()
+
+pdf("~/Desktop/NAIK-LAB-PROJECTS/Yue_Kody_paper(21-23)/Dotplot-HDM-data-reordered.pdf",width = 10,height = 4)
+SCpubr::do_DotPlot(hdm.data,features = c("Ccl22","Ccl17","Il4i1","Apol7c","Il12b"),sequential.palette = "YlOrRd",flip = TRUE) + scale_size_continuous(limits  = c(0,100)) + scale_fill_gradientn(colours = clist,limits = c(0,3.5))
+dev.off()
+```
+
+
+
+

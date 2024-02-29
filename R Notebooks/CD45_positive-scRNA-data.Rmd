@@ -1,0 +1,204 @@
+---
+title: "scRNA - CD45+  macrophage data"
+output: github_document
+---
+
+```{r}
+library(Seurat)
+library(tidyverse)
+```
+
+```{r}
+cd45.sc <- Read10X_h5(filename = "CD45-SC/filtered_feature_bc_matrix.h5")
+```
+
+```{r}
+cd45.umis <- as.matrix(cd45.sc[[1]])
+cd45.htos <- as.matrix(cd45.sc[[2]])
+```
+
+```{r}
+joint.bcs <- intersect(colnames(cd45.umis), colnames(cd45.htos))
+
+# Subset RNA and HTO counts by joint cell barcodes
+cd45.umis <- cd45.umis[, joint.bcs]
+cd45.htos <- as.matrix(cd45.htos[, joint.bcs])
+```
+
+Demultiplexing
+```{r}
+# Setup Seurat object
+cd45.hashtag <- CreateSeuratObject(counts = cd45.umis)
+
+# Normalize RNA data with log normalization
+cd45.hashtag <- NormalizeData(cd45.hashtag)
+# Find and scale variable features
+cd45.hashtag <- FindVariableFeatures(cd45.hashtag, selection.method = "mean.var.plot")
+cd45.hashtag <- ScaleData(cd45.hashtag, features = VariableFeatures(cd45.hashtag))
+
+# Add HTO data as a new assay independent from RNA
+cd45.hashtag[["HTO"]] <- CreateAssayObject(counts = cd45.htos)
+# Normalize HTO data, here we use centered log-ratio (CLR) transformation
+cd45.hashtag <- NormalizeData(cd45.hashtag, assay = "HTO", normalization.method = "CLR")
+```
+
+```{r}
+cd45.hashtag <- HTODemux(cd45.hashtag, assay = "HTO", positive.quantile = 0.99)
+table(cd45.hashtag$HTO_classification.global)
+```
+
+```{r}
+Idents(cd45.hashtag) <- "HTO_maxID"
+RidgePlot(cd45.hashtag, assay = "HTO", features = rownames(cd45.hashtag[["HTO"]])[1:3], ncol = 3)
+```
+
+```{r}
+Idents(cd45.hashtag) <- "HTO_classification.global"
+VlnPlot(cd45.hashtag, features = "nCount_RNA", pt.size = 0.1, log = TRUE)
+```
+
+```{r,}
+cd45.singlet <- subset(cd45.hashtag, idents = "Singlet")
+```
+
+```{r}
+cd45.singlet  <- add_mito(cd45.singlet)
+```
+
+```{r}
+VlnPlot(cd45.singlet, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"))
+```
+
+ QUALITY CONTROL
+
+```{r}
+cd45.cells <- cd45.singlet@meta.data %>% rownames_to_column("cell") %>%
+  filter(nFeature_RNA > 500 & nFeature_RNA < 4500 & percent.mt < 10) %>%
+    pull(cell)
+cd45.obj <- subset(cd45.singlet,cells=cd45.cells)
+```
+
+Normalization and scaling
+
+```{r}
+cd45.obj <- NormalizeData(cd45.obj, normalization.method = "LogNormalize")
+cd45.obj<- FindVariableFeatures(cd45.obj, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(cd45.obj)
+cd45.obj <- ScaleData(cd45.obj, features = all.genes)
+cd45.obj <- RunPCA(cd45.obj, features = VariableFeatures(object = cd45.obj))
+ElbowPlot(cd45.obj)
+```
+
+```{r}
+## RNA SEQ DATA - CLustering and DIM REDUCTION
+cd45.obj <- FindNeighbors(cd45.obj, dims = 1:10,assay = "RNA")
+cd45.obj <- FindClusters(cd45.obj, resolution = 0.6)
+cd45.obj <- RunUMAP(cd45.obj , dims = 1:10, assay = "RNA")
+```
+
+```{r}
+DimPlot(cd45.obj,label = TRUE)
+```
+
+Subset - clusters (19,8,16,3,14,12) - Lymphocytes cells
+
+```{r}
+lymphocytes.subset <-subset(cd45.obj,seurat_clusters %in% c(19,8,16,3,14,12))
+```
+
+```{r}
+lymphocytes.subset <- FindNeighbors(lymphocytes.subset, dims = 1:30,assay = "RNA")
+lymphocytes.subset<- FindClusters(lymphocytes.subset, resolution = 0.5)
+lymphocytes.subset<- RunUMAP(lymphocytes.subset , dims = 1:30, assay = "RNA")
+DimPlot(lymphocytes.subset,label = TRUE,split.by = "hash.ID")
+```
+
+```{r}
+FeaturePlot(lymphocytes.subset,features = c("Trdc"),split.by = "hash.ID")
+```
+
+```{r,eval=FALSE}
+saveRDS(lymphocytes.subset,file="LYMPHOCYTES_SUBSET.RDS")
+```
+
+LOAD LYMPHOCYTE DATA
+
+```{r}
+lymphocytes.subset <- readRDS(file="LYMPHOCYTES_SUBSET.RDS")
+```
+
+```{r}
+FeaturePlot(cd45.obj,features = c("Siglec1"))
+```
+
+```{r}
+FeaturePlot(cd45.obj,features = c("Hbegf"))
+#FeaturePlot(cd45.obj,features = c("HBEGF"))
+```
+
+SAVING THE SEURAT OBJECT
+
+```{r,eval=FALSE}
+saveRDS(cd45.obj,file="cd45.obj.RDS")
+cd45.obj <- readRDS("cd45.obj.RDS")
+```
+
+UMAP Plots
+
+```{r}
+library(ggsci)
+
+pdf("UMAP_(CD45_DATA)(CLUSTER_GROUPING).pdf")
+DimPlot(cd45.obj,label = TRUE,pt.size = 2) + scale_color_igv()
+dev.off()
+
+```
+
+```{r}
+pdf("UMAP_(CD45_DATA)(HASHTAG_GROUPING)(SPLIT_BY_HTO).pdf",width = 15)
+DimPlot(cd45.obj,label = TRUE,pt.size = 2,group.by = "hash.ID",split.by = "hash.ID") + scale_color_igv()
+dev.off()
+
+```
+
+Cluster specific marker genes
+
+```{r}
+cd45.all.markers <- FindAllMarkers(cd45.obj,assay = "RNA")
+```
+
+```{r}
+clusters <- unique(cd45.all.markers$cluster)
+dir.create("MARKER_GENES_(CD45_DATA)")
+for(x in clusters){
+  markers <- cd45.all.markers %>% dplyr::filter(cluster==x) %>% filter(p_val_adj<0.1)
+  write.csv(markers,file = paste("MARKER_GENES_(CD45_DATA)/Cluster_",x,"_Markers.csv"))
+}
+```
+
+Feature plots
+
+```{r}
+genes.of.interest <- c("Fcgr1","Mrc1","Adgre1","Itgam","Itgax","Cd207","Cx3cr1","Ccr2","Cd3d","Cd4","Cd8a","Cd3e","Itgae","Dpp4","Xcr1","Irf4","Irf8","Cd74","Foxp3","Rorc","Tbx21","Gata3","Kit","Cd19","Ly6c1","Ly6g","Siglecf","Fcer1a","Ncr1","Ccr6","Csf1r","Il17a","Il17f","Il22")
+
+dir.create("FEATURE_PLOTS_(CD45_DATA)")
+for(gene in genes.of.interest){
+  pdf(file = paste("FEATURE_PLOTS_(CD45_DATA)/GENE_EXPRESSION_",gene,"_.pdf"),width = 10,height=10 )
+  print(FeaturePlot(cd45.obj,features = c(gene)))
+  dev.off()
+}
+```
+
+Subset to TRDC
+
+```{r}
+Trdc.subset <- subset(lymphocytes.subset,seurat_clusters %in% c(2,4,7,8,9))
+Trdc.subset <- subset(Trdc.subset,Trdc>0)
+```
+
+DE genes - HTO1 vs HTO2
+
+```{r}
+DE.genes.part.1 <- FindMarkers(Trdc.subset,group.by = "hash.ID",ident.1 ="HTB-2",ident.2 = "HTB-3" ) %>% filter(p_val_adj<=0.1)
+write.csv(DE.genes.part.1,file="TRDC_SUBSET_HTB-2_VS_HTB-3.csv")
+```

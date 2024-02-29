@@ -1,0 +1,448 @@
+---
+title: "R Notebook"
+output: github_document
+---
+
+
+Single cell data from HDM and Control mouse skin
+
+```{r}
+library(tidyverse)
+library(devtools)
+library(Seurat)
+library(harmony)
+library(UCell)
+```
+
+Using Scooter pipeline to streamline the analysis
+```{r}
+devtools::install_github("igordot/scooter")
+```
+
+```{r}
+library("scooter")
+```
+
+Loading the h5 files (Please redefine path to raw files location)
+```{r}
+HDM.sc <- Read10X_h5(filename="/gpfs/data/sequence/results/naiklab/2023-06-30/cellranger/count-HDM/outs/filtered_feature_bc_matrix.h5")
+Control.sc <-Read10X_h5(filename="/gpfs/data/sequence/results/naiklab/2023-06-30/cellranger/count-Control/outs/filtered_feature_bc_matrix.h5")
+```
+
+```{r}
+Control.sc <- create_seurat_obj(counts_matrix=Control.sc,project = "Control")
+Control.sc$orig.ident <-"Control"
+HDM.sc <- create_seurat_obj(counts_matrix=HDM.sc,project = "HDM")
+HDM.sc$orig.ident <- "HDM"
+```
+```{r}
+combined.HDM_CTRL <- merge(Control.sc,HDM.sc,add.cell.ids=c("Control","HDM"),project="YX0004")
+```
+
+QC STEPS
+```{r}
+calculate_mito_pct(combined.HDM_CTRL)
+```
+```{r}
+VlnPlot(combined.HDM_CTRL, features = c("nFeature_RNA", "nCount_RNA", "pct_mito"), ncol = 3,group.by = "orig.ident")
+```
+```{r}
+filtered.cells <- filter_data(as.data.frame(combined.HDM_CTRL@meta.data,rownames = TRUE),min_genes = 200,max_genes =7000 ,max_mt = 20) 
+```
+
+```{r}
+Filtered_data <- subset(combined.HDM_CTRL,cells=filtered.cells)
+```
+
+Standard processing following Seurat vignette
+```{r}
+Filtered_data <- log_normalize_data(Filtered_data)
+Filtered_data <- FindVariableFeatures(Filtered_data)
+Filtered_data <- ScaleData(Filtered_data)
+Filtered_data <- RunPCA(Filtered_data)
+
+ElbowPlot(Filtered_data,ndims = 50)
+```
+
+```{r}
+set.seed(1007) 
+sc.data <- FindNeighbors(Filtered_data, dims = 1:15)
+sc.data <- FindClusters(sc.data, resolution = 0.4)
+sc.data <- RunUMAP(sc.data, dims = 1:15)
+```
+
+Generate UMAP plots without cell type labels assigned
+```{r}
+pdf("FULL_DATA_UMAP(With-cell-type-labels)(Split-by-group).pdf",width = 7)
+DimPlot(sc.data,split.by = "orig.ident")  + scale_color_igv()
+dev.off()
+
+pdf("FULL_DATA_UMAP(With-cell-type-labels).pdf",width = 7)
+DimPlot(sc.data,label = TRUE,label.box = TRUE)  + scale_color_igv()
+dev.off()
+
+```
+
+```{r}
+All.Marker.genes <- FindAllMarkers(sc.data)
+write.csv(All.Marker.genes,file="FULL_DATA_MARKER_GENES.csv")
+```
+
+### Assigning new labels
+13	Pericyte
+14	endothelial cell
+15	Schwann Cells
+17	Melanocytes
+18	NA
+19	red blood cell
+16	arrector pili musle
+11	Dermal Papilla
+12	Dermal sheath
+6	hypodermal fibroblast
+2	papilary fibroblast
+0	Bulge
+1	IFE and upper hair follicle
+3	anagen hair follicle 
+4	mast cell
+5	Dendrtic cell
+7	macrophage resident
+9	monocyte and neutrophils
+8	Langerhans cell
+10	Lymphocytes
+
+```{r}
+cell.labels <- c("0 Bulge","1 IFE and upper hair follicle","2 Papilary fibroblast","3 Anagen hair follicle","4 Mast cell","5 Dendrtic cell","6 Hypodermal fibroblast","7 Macrophage resident","8 Langerhans cell","9 Monocyte and neutrophils","10 Lymphocytes","11 Dermal Papilla","12 Dermal sheath","13 Pericyte","14 Endothelial cell","15 Schwann Cells","16 Arrector pili muscle","17 Melanocytes","18 NA","19 Red blood cell")
+names(cell.labels) <- levels(sc.data)
+sc.data <- RenameIdents(sc.data, cell.labels)
+sc.data <- StashIdent(sc.data,save.name = "Cell type labels")
+
+```
+
+```{r}
+DimPlot(sc.data)
+```
+
+```{r}
+custom_colors_v1 <- c("#B4DFFC","#6EAB3D","#FFD700","#A020F0","#FFA500","#AEDD3C","#595959","#D2AF81FF","#3A49FC","#FF0000","#A86F3D","#A18FAA")
+custom_colors_v2 <- c("#87CEFA","#4876FF","#CD853F","#BF96FF","#FF0000","#CAF178","#E0BFB6","#68228B","#7B0000","#FFC71A","#C355A0","#00B923","#8B5A2B","#838B8B","#005947","#C1CDCD","#FF7545","")
+
+```
+
+#Figure 4B
+UMAP plot with cell type labels
+```{r}
+pdf("FULL_DATA_UMAP(With-cell-type-labels)(Split-by-group).pdf",width = 15)
+DimPlot(sc.data,split.by = "orig.ident",cols = custom_colors_v2,pt.size = 2)  
+dev.off()
+
+pdf("FULL_DATA_UMAP(With-cell-type-labels).pdf",width =10)
+DimPlot(sc.data,cols = custom_colors_v2,pt.size = 2)  
+dev.off()
+```
+
+
+```{r}
+All.Marker.genes <- FindAllMarkers(sc.data)
+write.csv(All.Marker.genes,file="FULL_DATA_MARKER_GENES.csv")
+```
+
+```{r}
+#DE.Marker.genes <- FindAllMarkers(sc.data,)
+for(x in unique(sc.data$seurat_clusters)){
+  subset.data <- subset(sc.data,seurat_clusters %in% c(x))
+  DE.genes <- FindMarkers(sc.data,ident.1 = "HDM",ident.2 = "Control",subset.ident=c(x),group.by = "orig.ident")
+  write.csv(DE.genes,file=paste("DE_genes_HDM_vs_Control_cluster_",x,".csv"))
+}
+```
+
+Save Seurat object here
+```{r}
+saveRDS(sc.data,"../Yue_scRNA_003/full_data.RDS")
+```
+
+# Identify Immune cell clusters based on immune cell marker gene - Ptprc expression
+```{r}
+FeaturePlot(sc.data,features = c("Ptprc"))
+DimPlot(sc.data,label = TRUE)
+```
+
+Immune cell clusters identified as - 10,7,8,5,9,18,4
+- Subset to only include immune cells
+
+```{r}
+immune.data <- subset(sc.data,seurat_clusters %in% c(10,7,8,5,9,18,4))
+```
+```{r}
+DimPlot(immune.data)
+```
+```{r}
+set.seed(1007) 
+immune.data <- FindNeighbors(immune.data, dims = 1:15)
+immune.data <- FindClusters(immune.data, resolution = 0.4)
+immune.data <- RunUMAP(immune.data, dims = 1:15)
+```
+```{r}
+DimPlot(immune.data,label = TRUE,label.box = TRUE)  + scale_color_igv()
+```
+```{r}
+VlnPlot(immune.data,features=c("nFeature_RNA"))
+VlnPlot(immune.data,features=c("nCount_RNA"))
+VlnPlot(immune.data,features=c("pct_mito"))
+
+VlnPlot(immune.data,features=c("Mki67","Top2a"))
+
+```
+
+```{r}
+immune.data <- readRDS("immune.data.RDS")
+```
+
+```{r}
+pdf("IMMUNE_DATA_UMAP_(SPLIT_BY_GROUP).pdf",width = 7)
+DimPlot(immune.data,split.by = "orig.ident") + scale_color_igv()
+dev.off()
+
+pdf("IMMUNE_DATA_UMAP.pdf",width = 7)
+DimPlot(immune.data)  + scale_color_igv()
+dev.off()
+```
+
+```{r}
+FeaturePlot(immune.data,features = c("Mgl2"),split.by = "orig.ident")
+```
+
+```{r}
+all.markers.immune <- FindAllMarkers(immune.data)
+```
+
+```{r}
+write_csv(all.markers.immune,file = "All_immune_marker_genes.csv",)
+```
+
+New labels (After reviewing marker genes)
+Cluster id -
+0 - Langherhans cell
+11 - Langerhans cell
+7,10 - Macrophage
+3,4 - Dendritic cells
+2 - Monocytes
+9 - Neurtrophil
+6,8 - T cell
+5,1 - Mast cell
+12,13 - NA
+```{r}
+#cluster.ids <-c("Langerhans cell","Mast cell","Monocyte","Dendritic cell","Dendritic cell","Mast cell","T cell","Macrophage","T cell","Neutrophil","Macrophage","Langerhans cell","NA","NA")
+#names(cluster.ids) <- levels(immune.data)
+#immune.data <- RenameIdents(immune.data, cluster.ids)
+#immune.data<- StashIdent(immune.data,save.name ="Cell type labels")
+```
+
+Cluster ids VERSION 2 (KEEP INDIVIDUAL CLUSTERS) -
+0 - Langherhans cells 1
+11 - Langerhans cells 2
+7 - Macrophage 1
+10 - Macrophage 2
+3 - Dendritic cells 1
+4 - Dendritic cells 2
+2 - Monocytes 
+9 - Neurtrophil
+6 - T cell 1
+8 - T cell 2
+5 - Mast cell 1
+1 - Mast cell 2
+12 - NA
+13 - NA
+```{r}
+cluster.ids.ver2 <- c("0 - Langherhans cells 1","1 - Mast cell 2","2 - Monocytes","3 - Dendritic cells 1","4 - Dendritic cells 2","5 - Mast cell 1","6 - T cell 1","7 - Macrophage 1","8 - T cell 2","9 - Neurtrophil","10 - Macrophage 2","11 - Langerhans cells 2","12 - NA","13 - NA")
+names(cluster.ids.ver2) <- levels(immune.data)
+immune.data <- RenameIdents(immune.data, cluster.ids.ver2)
+immune.data<- StashIdent(immune.data,save.name ="Cell type labels version 2")
+```
+
+```{r}
+pdf("IMMUNE_DATA_UMAP(With-cell-type-labels).pdf",width = 7)
+DimPlot(immune.data,label = TRUE,label.box = TRUE)  + scale_color_igv()
+dev.off()
+```
+
+```{r}
+all.markers.immune.cell.types <- FindAllMarkers(immune.data)
+write_csv(all.markers.immune.cell.types,file="All_marker_genes(With-cell-type-labels).csv")
+```
+```{r}
+all.markers.immune.cell.types <- read_csv("All_marker_genes(With-cell-type-labels).csv")
+```
+
+```{r}
+saveRDS(immune.data,file="immune.data.RDS")
+```
+```{r}
+Dendritic.cells <- subset(immune.data,seurat_clusters %in% c(3,4))
+```
+```{r}
+DimPlot(Dendritic.cells)
+
+```
+
+### Reclustering
+```{r}
+set.seed(1007) 
+Dendritic.cells <- FindNeighbors(Dendritic.cells, dims = 1:15)
+Dendritic.cells <- FindClusters(Dendritic.cells, resolution = 0.4)
+Dendritic.cells <- RunUMAP(Dendritic.cells, dims = 1:15)
+```
+```{r}
+DimPlot(Dendritic.cells,split.by = "orig.ident")
+```
+```{r}
+saveRDS(Dendritic.cells,file="Dendritic.cells.RDS")
+```
+
+```{r}
+Idents(Dendritic.cells) <- "orig.ident"
+Dendritic.cells <- NormalizeData(Dendritic.cells)
+Dendritic.cells <- ScaleData(Dendritic.cells,features = NULL)
+de.genes <- FindMarkers(Dendritic.cells,ident.1 = "HDM",ident.2 = "Control")
+write.csv(de.genes,file="Dendritic.cells.HDM_vs_Control.csv")
+```
+
+```{r}
+de.genes.filtered <- de.genes %>% dplyr::filter(abs(avg_log2FC)>=1,p_val_adj<=0.05) %>% dplyr::arrange(avg_log2FC)
+
+pdf("Heatmap_DC_HDM_vs_CTRL.pdf",height = 20,width = 7)
+DoHeatmap(Dendritic.cells,features = rownames(de.genes.filtered),group.by = "orig.ident") + viridis::scale_fill_viridis()
+dev.off()
+```
+
+```{r}
+Regions.df <- table(new.skin.combined@meta.data$Spatial.regions, new.skin.combined@meta.data$sample.id) %>% as.data.frame() %>% dplyr::rename(Spatial_Region=Var1, Sample=Var2) 
+
+black.bold.16.text <- element_text(face = "bold", color = "black", size = 14,angle = 90, vjust = 0.5, hjust=1)
+
+brks <- c(0, 0.25, 0.5, 0.75, 1)
+
+#pdf(file="PERCENTAGE_COMPOSTION_PLOT_HEALTHY_SAMPLES.pdf",height = 14,width = 8)
+ggplot(Regions.df,aes(x=Sample,y=Freq,fill=Spatial_Region)) + geom_bar(stat="identity", position="fill") + scale_fill_manual(values =color.labels.anchor)  + ggplot2::theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.text.x=black.bold.16.text) + scale_y_continuous(breaks = brks, labels = scales::percent(brks)) + ylab("% Composition of Sample by Spatial Region / Clusters")
+```
+
+## Import single cell dataset
+```{r}
+ref.data <- Read10X(data.dir="REF-SINGLE-CELL-DATA/filtered_gene_bc_matrices_mex_Fig3/mm10/")
+
+meta.data <- read.csv("REF-SINGLE-CELL-DATA/annot_Fig_3.csv") %>% column_to_rownames("cell")
+ref.data <- CreateSeuratObject(counts = ref.data,meta.data =meta.data)
+```
+
+```{r}
+UMAP.data <- meta.data[c("UMAP_1","UMAP_2")] %>% as.matrix()
+
+ref.data[["umap"]] <- CreateDimReducObject(embeddings = UMAP.data,assay = "RNA",key="UMAP_")
+```
+```{r}
+ref.data <- ScaleData(ref.data) %>% NormalizeData()
+```
+```{r}
+Idents(ref.data) <- "cluster"
+Ref.data.marker_genes <- FindAllMarkers(ref.data)
+```
+```{r}
+write.csv(Ref.data.marker_genes,file="Ref.data.marker_genes.csv")
+```
+
+# Total genes
+```{r}
+length(intersect(rownames(ref.data@assays$RNA),rownames(combined.HDM_CTRL@assays$RNA)))
+```
+```{r}
+ref.data@assays$RNA@counts
+```
+
+# Perform MIA between reference data and Yue's single cell data
+```{r}
+E.data <- MIA(all.markers.immune.cell.types,Ref.data.marker_genes,total_genes = 20000) %>% mutate_all( ~replace_na(.,0)) %>% column_to_rownames("cluster") %>% as.data.frame() 
+
+is.na(E.data)<-sapply(E.data, is.infinite)
+E.data[is.na(E.data)]<-0
+```
+
+```{r}
+pheatmap(E.data)
+```
+
+
+```{r}
+DimPlot(immune.data,group.by = "seurat_clusters",split.by = "orig.ident",label = TRUE)
+DimPlot(immune.data,group.by = "Cell.type.labels",split.by = "orig.ident") + scale_color_cosmic()
+```
+```{r}
+Idents(immune.data) <- "Cell.type.labels.version.2"
+all.markers.immune.cell.types.seurat_cluster.labels <- FindAllMarkers(immune.data)
+```
+
+```{r}
+E.data <- MIA(all.markers.immune.cell.types.seurat_cluster.labels,Ref.data.marker_genes,total_genes = 22809) %>% mutate_all( ~replace_na(.,0)) %>% column_to_rownames("cluster") %>% as.data.frame() 
+
+is.na(E.data)<-sapply(E.data, is.infinite)
+E.data[is.na(E.data)]<-0
+
+pdf("../Yue_scRNA_003/E_DATA_(IMMUNE_CELLS_ONLY).pdf")
+pheatmap(E.data,cluster_rows = FALSE,cluster_cols = FALSE)
+dev.off()
+```
+
+```{r}
+MIA <- function(total_genes,single_cell.markers,spatial.markers)
+{
+  #D.SCORES <- c()
+  # Perform this operation for every cell type
+  #single_cell.markers <- FindAllMarkers(single_cell,assay = assay_use,logfc.threshold = 0.25,return.thresh = p_val_adj < 0.1)
+  #spatial.markers <- FindAllMarkers(spatial_data,assay = assay_use,logfc.threshold = 0.25,return.thresh = p_val_adj < 0.1)
+  cell.types <- single_cell.markers %>% dplyr::select(cluster) %>% unique() %>% as.list()
+  spatial.regions <- spatial.markers %>% dplyr::select(cluster) %>% unique() %>% as.list()
+  E.SCORES <- data.frame(spatial.regions)
+  for(i in cell.types){
+    for (x in i){
+      e_list <- c()
+    #list.append(e_list,i)
+      for(y in spatial.regions){
+        for(z in y){
+          single_cell <- single_cell.markers %>% filter(cluster==x) %>% filter(p_val_adj<0.05) %>% top_n(n = 300, wt = avg_log2FC) 
+          spatial_data <- spatial.markers %>% filter(cluster==z) %>% filter(p_val_adj<0.05) %>% top_n(n = 300, wt = avg_log2FC) 
+          e <- MIA_ENRICH(single_cell,spatial_data,total = total_genes)
+          #d <- MIA_DEPLETE(single_cell,spatial_data,total = total_genes)
+          e_list <- c(e_list,e)
+        }
+        #D.SCORES <- append(D.SCORES,d)
+      }
+      E.SCORES[paste(x)] <- e_list
+    #E.SCORES <- append(E.SCORES,e)
+    }
+  }
+  #e.data <- data.frame("GA"=E.SCORES[1],"ER"=E.SCORES[2],"C0L17A1+"=E.SCORES[3])
+  #d.data <- data.frame("GA"=D.SCORES[1],"ER"=D.SCORES[2],"C0L17A1+"=D.SCORES[3])
+  #res <- list(E.SCORES,e.data)
+  return(E.SCORES)
+}
+```
+
+```{r}
+dc.data <- subset(dc.data,seurat_clusters %in% c(5))
+```
+```{r}
+#load("../Yue_scRNA_003/REF-SINGLE-CELL-DATA-PART-2/mouse_dc.rd")
+ref.dc.data <- readRDS("../Yue_scRNA_003/REF-SINGLE-CELL-DATA-PART-2/mouse_dc.rd")
+```
+```{r}
+dc.data <- readRDS("~/Projects/Yue_scRNA_003/REF-SINGLE-CELL-DATA-PART-2/mouse_dc.rds")
+```
+
+```{r}
+tools::checkRd("../Yue_scRNA_003/REF-SINGLE-CELL-DATA-PART-2/mouse_dc.rds")
+```
+
+```{r}
+DimPlot(dc.data,group.by = "Cell.type.labels")
+```
+
+
